@@ -1,2 +1,10 @@
 .DS_Store
 .vscode/
+
+#Binaries
+tinyshell
+*.o
+*.out
+
+# OS
+.DS_Store
