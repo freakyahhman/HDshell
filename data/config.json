@@ -1,3 +1,12 @@
 {
-    "name": "TaTamShell"
+    "name": "TaTamShell",
+    "version": "1.0",
+    "color_scheme": "dark",
+    "prompt": {
+        "user": "green",
+        "host": "blue",
+        "path": "yellow",
+        "symbol": "red"
+    },
+    "history_size": 1000
 }

@@ -1,4 +1,3 @@
-
 #include "parser.h"
 #include "builtins.h"
 #include "executor.h"
@@ -7,6 +6,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <unistd.h>
 
 
 // doc du lieu tu file config.json
@@ -46,12 +46,22 @@ std::string getConfigValue(const std::string& key) {
     return "";
 }
 
+std::string getCurrentDirectory() {
+    char buffer[1024];
+    if (getcwd(buffer, sizeof(buffer)) != nullptr) {
+        return std::string(buffer);
+    } else {
+        perror("getcwd");
+        return "";
+    }
+}
+
 int main() {
     readJsonFile("data/config.json");
     std::cout << "Welcome to " << getConfigValue("name") << "!" << std::endl;
     std::string input;
     while (true) {
-        std::cout << getConfigValue("name") << " > ";
+        std::cout << getConfigValue("name") << " " << getCurrentDirectory() << " > ";
         std::getline(std::cin, input);
         Command* cmd = Parser::parse(input);
         if (cmd) {
