@@ -64,10 +64,4 @@ public:
     int execute() override;
 };
 
-class ExitCommand : public SimpleCommand {
-public:
-    ExitCommand(const std::vector<std::string>& tokens) : SimpleCommand(tokens) {}
-
-    int execute() override;
-};
 #endif // COMMAND_H
