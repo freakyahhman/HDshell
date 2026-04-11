@@ -10,10 +10,7 @@ Command* Parser::parse(const std::string& input) {
     std::vector<std::string> tokens = tokenize(trimmedInput);
     handleSpecialOperators(tokens);
 
-    if (tokens[0] == "exit") {
-        return new ExitCommand(tokens);
-    }
-    return nullptr;
+    return new SimpleCommand(tokens); // Hien tai chi tra ve SimpleCommand, sau nay se can them logic de tra ve PipeCommand neu co pipe
 }
 
 std::vector<std::string> Parser::tokenize(const std::string& input) {
