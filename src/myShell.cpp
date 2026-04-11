@@ -48,11 +48,10 @@ std::string getConfigValue(const std::string& key) {
 
 int main() {
     readJsonFile("data/config.json");
-    const std::string shellName = getConfigValue("name");
-    std::cout << "Welcome to " << shellName << "!" << std::endl;
+    std::cout << "Welcome to " << getConfigValue("name") << "!" << std::endl;
     std::string input;
     while (true) {
-        std::cout << shellName << " > ";
+        std::cout << getConfigValue("name") << " > ";
         std::getline(std::cin, input);
         Command* cmd = Parser::parse(input);
         if (cmd) {
