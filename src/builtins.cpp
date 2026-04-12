@@ -1,4 +1,5 @@
 #include "builtins.h"
+#include <string>
 #include <iostream>
 #include <unistd.h>
 
@@ -36,6 +37,46 @@ int Builtins::executeBuiltin(const Command& cmd) const {
 
 int Builtins::builtin_cd(const Command& cmd) {
     (void)cmd;
+    SimpleCommand* simpleCmd = const_cast<SimpleCommand*>(dynamic_cast<const SimpleCommand*>(&cmd));
+    if (simpleCmd == nullptr) {
+        std::cerr << "Error: Unsupported command type" << std::endl;
+        return -1;
+    }
+
+    std::string targetDir;
+
+    if (simpleCmd->args.empty() || simpleCmd->args[0] == "~") {
+        char* home = getenv("HOME");
+        if (home == nullptr) {
+            std::cerr << "Error: HOME environment variable not set" << std::endl;
+            return -1;
+        }
+        targetDir = home;
+    } else if (simpleCmd->args[0] == "-") {
+        const char* oldpwd = getenv("OLDPWD");
+        if (oldpwd == nullptr) {
+            std::cerr << "Error: OLDPWD environment variable not set" << std::endl;
+            return -1;
+        }
+        targetDir = oldpwd;
+        std::cout << targetDir << std::endl;
+    } else {
+        targetDir = simpleCmd->args[0];
+    }
+
+    char cwd[1024];
+    getcwd(cwd, sizeof(cwd));
+
+    if (chdir(targetDir.c_str()) != 0) {
+        std::cerr << "Error: Failed to change directory to " << targetDir << std::endl;
+        return -1;
+    }
+
+    setenv("OLDPWD", cwd, 1);
+    char new_pwd[1024];
+    getcwd(new_pwd, sizeof(new_pwd));
+    setenv("PWD", new_pwd, 1);
+
     return 0;
 }
 

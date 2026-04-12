@@ -104,7 +104,7 @@ Trạng thái hiện tại:
 - `exit`: đã hoạt động.
 - `clear`: đã hoạt động.
 - `help`: đã hoạt động.
-- `cd`: hiện đang ở mức cơ bản, chưa hoàn thiện đầy đủ các trường hợp.
+- `cd`: hỗ trợ `cd`, `cd ~`, `cd -`, đường dẫn tương đối và tuyệt đối.
 
 ## Giới hạn hiện tại
 
