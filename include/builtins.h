@@ -19,6 +19,7 @@ private:
     static int builtin_exit(const Command& cmd);
     static int builtin_clear(const Command& cmd);
     static int builtin_help(const Command& cmd);
+    static int builtin_father(const Command& cmd);
 };
 
 #endif  //BUILTINS_H

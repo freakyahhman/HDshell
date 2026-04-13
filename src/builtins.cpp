@@ -1,4 +1,6 @@
 #include "builtins.h"
+#include "path_utils.h"
+#include <fstream>
 #include <string>
 #include <iostream>
 #include <unistd.h>
@@ -10,7 +12,8 @@ const std::map<std::string, std::function<int(const Command&)>> Builtins::builti
     {"cd", builtin_cd},
     {"exit", builtin_exit},
     {"clear", builtin_clear},
-    {"help", builtin_help}
+    {"help", builtin_help},
+    {"father", builtin_father},
 };
 
 
@@ -101,6 +104,25 @@ int Builtins::builtin_help(const Command& cmd) {
     std::cout << "clear: Clear the terminal screen." << std::endl;
     std::cout << "help: Display this help message." << std::endl;
     std::cout << "============================================================" << std::endl;
+    return 0;
+}
+
+
+int Builtins::builtin_father(const Command& cmd) {
+    (void)cmd;
+    std::string filename = path_utils::resolveDataFilePath("father.txt");
+    std::ifstream infile = std::ifstream(filename);
+    if (!infile.is_open()) {
+        std::cerr << "Error: Could not open file " << filename << std::endl;
+        return -1; 
+    }
+
+    while (!infile.eof()) {
+        std::string line;
+        std::getline(infile, line);
+        std::cout << line << std::endl;
+    }
+
     return 0;
 }
 

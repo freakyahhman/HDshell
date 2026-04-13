@@ -2,6 +2,7 @@
 #include "builtins.h"
 #include "executor.h"
 #include "command.h"
+#include "path_utils.h"
 #include <iostream>
 #include <fstream>
 #include <map>
@@ -57,7 +58,7 @@ std::string getCurrentDirectory() {
 }
 
 int main() {
-    readJsonFile("data/config.json");
+    readJsonFile(path_utils::resolveDataFilePath("config.json"));
     std::cout << "Welcome to " << getConfigValue("name") << "!" << std::endl;
     std::string input;
     while (true) {
