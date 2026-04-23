@@ -17,10 +17,13 @@ private:
 
     //Xu ly cac toan tu dac biet nhu redirection va pipe
     // (chua hoan thien)
-    static void handleSpecialOperators(std::vector<std::string>& tokens);
+    static void handleSpecialOperators(std::vector<std::string>& tokens, bool isPipe);
     
     //Bo di dau space thua o dau va cuoi chuoi
     static std::string trim(const std::string& str);
+
+    //Ham nay de lay input va output file tu tokens, dong thoi xoa cac token lien quan den redirection
+    static std::vector<std::string> extractRedirection(std::vector<std::string>& tokens);
 };
 
 #endif

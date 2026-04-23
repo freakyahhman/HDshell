@@ -16,3 +16,10 @@ int SimpleCommand::execute() {
 
     return executor->handleFork(this); // Neu khong phai builtin, thuc thi lenh binh thuong
 }
+
+
+int PipeCommand::execute() {
+    // Ham nay se duoc su dung de thuc thi cac lenh co pipe
+    // (chua hoan thien)
+    return 0;
+}
