@@ -3,6 +3,7 @@
 #include "executor.h"
 #include "command.h"
 #include "path_utils.h"
+#include "globals.h"
 #include <iostream>
 #include <fstream>
 #include <map>
@@ -57,6 +58,9 @@ std::string getCurrentDirectory() {
     }
 }
 
+std::unique_ptr<Executor> executor = std::make_unique<Executor>();
+std::unique_ptr<Parser> parser = std::make_unique<Parser>();
+
 int main() {
     readJsonFile(path_utils::resolveDataFilePath("config.json"));
     std::cout << "Welcome to " << getConfigValue("name") << "!" << std::endl;
@@ -64,9 +68,9 @@ int main() {
     while (true) {
         std::cout << getConfigValue("name") << " " << getCurrentDirectory() << " > ";
         std::getline(std::cin, input);
-        Command* cmd = Parser::parse(input);
+        Command* cmd = parser->parse(input);
         if (cmd) {
-            Executor::executeCommand(std::unique_ptr<Command>(cmd));
+            executor->executeCommand(std::unique_ptr<Command>(cmd));
         }
     }
 }
