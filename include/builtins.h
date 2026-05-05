@@ -22,6 +22,10 @@ private:
     static int builtin_father(const Command& cmd);
     static int builtin_ps(const Command& cmd);
     static int builtin_jobs(const Command& cmd);
+    static int builtin_kill(const Command& cmd);
+    static int builtin_killall(const Command& cmd);
+    static int builtin_stop(const Command& cmd);
+    static int builtin_resume(const Command& cmd);
 };
 
 #endif  //BUILTINS_H

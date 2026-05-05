@@ -31,6 +31,52 @@ Jobs::Job* findByPid(pid_t pid) {
 
     return nullptr;
 }
+
+bool isActive(Jobs::Status status) {
+    return status == Jobs::Status::Running || status == Jobs::Status::Stopped;
+}
+
+std::string getCommandName(const std::string& command) {
+    size_t firstSpace = command.find(' ');
+    if (firstSpace == std::string::npos) {
+        return command;
+    }
+
+    return command.substr(0, firstSpace);
+}
+}
+
+pid_t Jobs::getPidByJobId(int jobId) {
+    for (auto& job : backgroundJobs) {
+        if (job.id == jobId && isActive(job.status)) {
+            return job.pid;
+        }
+    }
+
+    return -1;
+}
+
+std::vector<pid_t> Jobs::findPidsByCommandName(const std::string& name) {
+    std::vector<pid_t> pid_list;
+
+    for (auto& job : backgroundJobs) {
+        if (getCommandName(job.command) == name && isActive(job.status)) {
+            pid_list.push_back(job.pid);
+        }
+    }
+
+
+    return pid_list;
+}
+
+bool Jobs::setStatusByPid(pid_t pid, Status status) {
+    Job* job = findByPid(pid);
+    if (job == nullptr) {
+        return false;
+    }
+
+    job->status = status;
+    return true;
 }
 
 int Jobs::add(pid_t pid, const std::string& command) {
@@ -43,7 +89,7 @@ void Jobs::reap(bool notify) {
     int status;
     pid_t pid;
 
-    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
         Job* job = findByPid(pid);
         if (job == nullptr) {
             continue;
@@ -54,6 +100,12 @@ void Jobs::reap(bool notify) {
         }
         else if (WIFSIGNALED(status)) {
             job->status = Status::Terminated;
+        }
+        else if (WIFSTOPPED(status)) {
+            job->status = Status::Stopped;
+        }
+        else if (WIFCONTINUED(status)) {
+            job->status = Status::Running;
         }
         else {
             job->status = Status::Stopped;

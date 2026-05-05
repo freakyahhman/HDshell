@@ -8,8 +8,80 @@
 #include <filesystem>
 #include <sstream>
 #include <cctype>
+#include <signal.h>
 
+namespace {
+bool parsePositiveInt(const std::string& value, int& result) {
+    if (value.empty()) {
+        return false;
+    }
 
+    result = 0;
+    for (char c : value) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+            return false;
+        }
+        result = result * 10 + (c - '0');
+    }
+
+    return result > 0;
+}
+
+bool resolvePidTarget(const std::string& target, const char* commandName, pid_t& pid) {
+    if (!target.empty() && target[0] == '%') {
+        int jobId;
+        if (!parsePositiveInt(target.substr(1), jobId)) {
+            std::cerr << commandName << ": invalid job id: " << target << std::endl;
+            return false;
+        }
+
+        pid = Jobs::getPidByJobId(jobId);
+        if (pid < 0) {
+            std::cerr << commandName << ": job not found: " << target << std::endl;
+            return false;
+        }
+
+        return true;
+    }
+
+    int parsedPid;
+    if (!parsePositiveInt(target, parsedPid)) {
+        std::cerr << commandName << ": invalid pid: " << target << std::endl;
+        return false;
+    }
+
+    pid = static_cast<pid_t>(parsedPid);
+    return true;
+}
+
+int signalOneProcess(const Command& cmd, const char* commandName, int signalNumber, Jobs::Status newStatus) {
+    const SimpleCommand* simpleCmd = dynamic_cast<const SimpleCommand*>(&cmd);
+    if (simpleCmd == nullptr) {
+        std::cerr << "Error: Unsupported command type" << std::endl;
+        return -1;
+    }
+
+    if (simpleCmd->args.size() != 1) {
+        std::cerr << "Usage: " << commandName << " <pid|%job_id>" << std::endl;
+        return -1;
+    }
+
+    Jobs::reap(false);
+
+    pid_t pid;
+    if (!resolvePidTarget(simpleCmd->args[0], commandName, pid)) {
+        return -1;
+    }
+
+    if (::kill(pid, signalNumber) != 0) {
+        perror(commandName);
+        return -1;
+    }
+
+    Jobs::setStatusByPid(pid, newStatus);
+    return 0;
+}
+}
 
 Builtins::Builtins() = default;
 
@@ -21,7 +93,11 @@ const std::map<std::string, std::function<int(const Command&)>> Builtins::builti
     {"help", builtin_help},
     {"father", builtin_father},
     {"ps", builtin_ps},
-    {"jobs", builtin_jobs}
+    {"jobs", builtin_jobs},
+    {"kill", builtin_kill},
+    {"killall", builtin_killall},
+    {"stop", builtin_stop},
+    {"resume", builtin_resume}
 };
 
 
@@ -113,6 +189,10 @@ int Builtins::builtin_help(const Command& cmd) {
     std::cout << "help: Display this help message." << std::endl;
     std::cout << "ps: Show all processes and their information include: their own ids, their parents' ids, their states." << std::endl;
     std::cout << "jobs: Show background jobs started by this shell." << std::endl;
+    std::cout << "kill: Send a signal to a PID or background job." << std::endl;
+    std::cout << "killall: Send a signal to active background jobs by command name." << std::endl;
+    std::cout << "stop: Stop a PID or background job." << std::endl;
+    std::cout << "resume: Resume a PID or background job." << std::endl;
     std::cout << "============================================================" << std::endl;
     return 0;
 }
@@ -185,4 +265,129 @@ int Builtins::builtin_ps(const Command& cmd) {
     }
 
     return 0;
+}
+
+
+int Builtins::builtin_kill(const Command& cmd) {
+    const SimpleCommand* simpleCmd = dynamic_cast<const SimpleCommand*>(&cmd);
+    if (simpleCmd == nullptr) {
+        std::cerr << "Error: Unsupported command type" << std::endl;
+        return -1;
+    }
+
+    if (simpleCmd->args.empty()) {
+        std::cerr << "Usage: kill [-signal] <pid|%job_id> ..." << std::endl;
+        return -1;
+    }
+
+    int signalNumber = SIGTERM;
+    size_t targetIndex = 0;
+
+    if (!simpleCmd->args[0].empty() && simpleCmd->args[0][0] == '-') {
+        if (!parsePositiveInt(simpleCmd->args[0].substr(1), signalNumber)) {
+            std::cerr << "kill: invalid signal: " << simpleCmd->args[0] << std::endl;
+            return -1;
+        }
+
+        targetIndex = 1;
+    }
+
+    if (targetIndex >= simpleCmd->args.size()) {
+        std::cerr << "Usage: kill [-signal] <pid|%job_id> ..." << std::endl;
+        return -1;
+    }
+
+    int exitCode = 0;
+    Jobs::reap(false);
+
+    for (size_t i = targetIndex; i < simpleCmd->args.size(); ++i) {
+        const std::string& target = simpleCmd->args[i];
+        pid_t pid;
+
+        if (!resolvePidTarget(target, "kill", pid)) {
+            exitCode = -1;
+            continue;
+        }
+
+        if (::kill(pid, signalNumber) != 0) {
+            perror("kill");
+            exitCode = -1;
+        }
+        else if (signalNumber == SIGSTOP) {
+            Jobs::setStatusByPid(pid, Jobs::Status::Stopped);
+        }
+        else if (signalNumber == SIGCONT) {
+            Jobs::setStatusByPid(pid, Jobs::Status::Running);
+        }
+    }
+
+    return exitCode;
+}
+
+int Builtins::builtin_killall(const Command& cmd) {
+    const SimpleCommand* simpleCmd = dynamic_cast<const SimpleCommand*>(&cmd);
+    if (simpleCmd == nullptr) {
+        std::cerr << "Error: Unsupported command type" << std::endl;
+        return -1;
+    }
+
+    if (simpleCmd->args.empty()) {
+        std::cerr << "Usage: killall [-signal] <command_name> ..." << std::endl;
+        return -1;
+    }
+
+    int signalNumber = SIGTERM;
+    size_t targetIndex = 0;
+
+    if (!simpleCmd->args[0].empty() && simpleCmd->args[0][0] == '-') {
+        if (!parsePositiveInt(simpleCmd->args[0].substr(1), signalNumber)) {
+            std::cerr << "killall: invalid signal: " << simpleCmd->args[0] << std::endl;
+            return -1;
+        }
+
+        targetIndex = 1;
+    }
+
+    if (targetIndex >= simpleCmd->args.size()) {
+        std::cerr << "Usage: killall [-signal] <command_name> ..." << std::endl;
+        return -1;
+    }
+
+    int exitCode = 0;
+    Jobs::reap(false);
+
+    for (size_t i = targetIndex; i < simpleCmd->args.size(); ++i) {
+        const std::string& commandName = simpleCmd->args[i];
+        std::vector<pid_t> pids = Jobs::findPidsByCommandName(commandName);
+
+        if (pids.empty()) {
+            std::cerr << "killall: no active background job named: "
+                      << commandName << std::endl;
+            exitCode = -1;
+            continue;
+        }
+
+        for (pid_t pid : pids) {
+            if (::kill(pid, signalNumber) != 0) {
+                perror("killall");
+                exitCode = -1;
+            }
+            else if (signalNumber == SIGSTOP) {
+                Jobs::setStatusByPid(pid, Jobs::Status::Stopped);
+            }
+            else if (signalNumber == SIGCONT) {
+                Jobs::setStatusByPid(pid, Jobs::Status::Running);
+            }
+        }
+    }
+
+    return exitCode;
+}
+
+int Builtins::builtin_stop(const Command& cmd) {
+    return signalOneProcess(cmd, "stop", SIGSTOP, Jobs::Status::Stopped);
+}
+
+int Builtins::builtin_resume(const Command& cmd) {
+    return signalOneProcess(cmd, "resume", SIGCONT, Jobs::Status::Running);
 }
