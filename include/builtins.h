@@ -26,6 +26,7 @@ private:
     static int builtin_killall(const Command& cmd);
     static int builtin_stop(const Command& cmd);
     static int builtin_resume(const Command& cmd);
+    static int builtin_change(const Command& cmd);
 };
 
 #endif  //BUILTINS_H

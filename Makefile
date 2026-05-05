@@ -1,6 +1,6 @@
 CC = g++
 CFLAGS = -Iinclude -Wall -std=c++17
-SRC = src/myShell.cpp src/parser.cpp src/builtins.cpp src/command.cpp src/executor.cpp src/jobs.cpp
+SRC = src/myShell.cpp src/parser.cpp src/builtins.cpp src/command.cpp src/executor.cpp src/jobs.cpp src/config.cpp
 OBJ = $(SRC:.cpp=.o)
 TARGET = tinyshell
 

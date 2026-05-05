@@ -1,4 +1,5 @@
 #include "builtins.h"
+#include "config.h"
 #include "jobs.h"
 #include "path_utils.h"
 #include <fstream>
@@ -25,6 +26,18 @@ bool parsePositiveInt(const std::string& value, int& result) {
     }
 
     return result > 0;
+}
+
+std::string joinArgs(const std::vector<std::string>& args, size_t start) {
+    std::string result;
+    for (size_t i = start; i < args.size(); ++i) {
+        if (!result.empty()) {
+            result += " ";
+        }
+        result += args[i];
+    }
+
+    return result;
 }
 
 bool resolvePidTarget(const std::string& target, const char* commandName, pid_t& pid) {
@@ -97,7 +110,8 @@ const std::map<std::string, std::function<int(const Command&)>> Builtins::builti
     {"kill", builtin_kill},
     {"killall", builtin_killall},
     {"stop", builtin_stop},
-    {"resume", builtin_resume}
+    {"resume", builtin_resume},
+    {"change", builtin_change}
 };
 
 
@@ -193,6 +207,7 @@ int Builtins::builtin_help(const Command& cmd) {
     std::cout << "killall: Send a signal to active background jobs by command name." << std::endl;
     std::cout << "stop: Stop a PID or background job." << std::endl;
     std::cout << "resume: Resume a PID or background job." << std::endl;
+    std::cout << "change: Change shell name or prompt color." << std::endl;
     std::cout << "============================================================" << std::endl;
     return 0;
 }
@@ -390,4 +405,47 @@ int Builtins::builtin_stop(const Command& cmd) {
 
 int Builtins::builtin_resume(const Command& cmd) {
     return signalOneProcess(cmd, "resume", SIGCONT, Jobs::Status::Running);
+}
+
+int Builtins::builtin_change(const Command& cmd) {
+    const SimpleCommand* simpleCmd = dynamic_cast<const SimpleCommand*>(&cmd);
+    if (simpleCmd == nullptr) {
+        std::cerr << "Error: Unsupported command type" << std::endl;
+        return -1;
+    }
+
+    if (simpleCmd->args.size() < 2) {
+        std::cerr << "Usage: change <name|color> <value>" << std::endl;
+        return -1;
+    }
+
+    const std::string& key = simpleCmd->args[0];
+    std::string value = joinArgs(simpleCmd->args, 1);
+
+    if (key == "name") {
+        if (!Config::set("name", value)) {
+            return -1;
+        }
+
+        std::cout << "Shell name changed to " << value << std::endl;
+        return 0;
+    }
+
+    if (key == "color") {
+        if (!Config::isValidColor(value)) {
+            std::cerr << "change: invalid color: " << value << std::endl;
+            std::cerr << "Available colors: default, black, red, green, yellow, blue, magenta, cyan, white" << std::endl;
+            return -1;
+        }
+
+        if (!Config::set("color", value)) {
+            return -1;
+        }
+
+        std::cout << "Shell color changed to " << value << std::endl;
+        return 0;
+    }
+
+    std::cerr << "Usage: change <name|color> <value>" << std::endl;
+    return -1;
 }
