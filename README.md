@@ -1,7 +1,9 @@
 # HDshell
 
 Project 1: TinyShell cho môn Nguyên Lý Hệ Điều Hành - Đại học Bách Khoa Hà Nội  
+
 Nhân viên công ty: Tạ Đình Tâm (CEO), Đào Huy Hoàng (Project Manager), Đồng Mạnh Hùng (Employee), Nguyễn Danh Thái (Security)
+
 Giảng viên hướng dẫn: TS Phạm Đăng Hải
 
 ## Giới Thiệu
@@ -14,6 +16,7 @@ HDshell là một shell đơn giản viết bằng C++17 để minh họa các c
 - Quản lý tiến trình nền và job table.
 - Điều khiển tiến trình bằng signal.
 - Pipe, redirection và builtin command.
+- Chạy file script `.sh` theo từng dòng lệnh.
 
 Shell không nhằm thay thế Bash/Zsh. Mục tiêu chính là làm rõ logic xử lý command và vòng đời tiến trình.
 
@@ -65,6 +68,25 @@ Chạy shell:
 ./tinyshell
 ```
 
+Chạy file script `.sh`:
+
+```bash
+./tinyshell path/to/script.sh
+```
+
+Script mode đọc file từ trên xuống dưới, bỏ qua dòng trống, dòng comment bắt đầu bằng `#` và dòng shebang `#!...`. Mỗi dòng còn lại được đưa qua cùng `Parser` và `Command` như khi nhập trực tiếp trong shell.
+
+Ví dụ file `demo.sh`:
+
+```sh
+#!/usr/bin/env tinyshell
+# Các command bên dưới chạy bằng HDshell
+echo hello
+echo hello | wc -c
+sleep 5 &
+jobs
+```
+
 Dọn file build:
 
 ```bash
@@ -90,7 +112,7 @@ docker run -it --rm tinyshell-ubuntu
 
 ## Luồng Xử Lý Command
 
-1. `myShell.cpp` đọc một dòng input từ người dùng.
+1. `myShell.cpp` đọc một dòng input từ người dùng hoặc một dòng trong file `.sh`.
 2. `Parser::parse` tách input thành token.
 3. Nếu có `|`, parser tạo `PipeCommand`; ngược lại tạo `SimpleCommand`.
 4. Parser tách các toán tử đặc biệt:
@@ -398,6 +420,7 @@ Prompt có hai kiểu chính:
 - Có xử lý zombie process bằng `waitpid(..., WNOHANG)`.
 - Hỗ trợ background command và background pipeline.
 - Hỗ trợ redirection cho cả external command và builtin command.
+- Hỗ trợ chạy file script `.sh` đơn giản, dùng lại toàn bộ parser/executor hiện có.
 - Config có thể thay đổi runtime bằng builtin `change`.
 
 ## Điểm Yếu Và Giới Hạn
@@ -411,6 +434,10 @@ Prompt có hai kiểu chính:
   - Chưa có `>>`, `2>`, `2>&1`, heredoc.
 - Chưa có logical operator:
   - Chưa hỗ trợ `&&`, `||`, `;`.
+- Script `.sh` mới ở mức chạy tuần tự từng dòng:
+  - Chưa có `if`, `for`, `while`, function.
+  - Chưa có biến shell nội bộ.
+  - Chưa có cơ chế dừng script khi một dòng lỗi.
 - Job control chưa đầy đủ như shell thật:
   - Chưa có `fg`, `bg`.
   - Chưa điều khiển terminal foreground process group bằng `tcsetpgrp`.
