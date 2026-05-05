@@ -1,6 +1,7 @@
 #include "parser.h"
 #include "builtins.h"
 #include "executor.h"
+#include "jobs.h"
 #include "command.h"
 #include "path_utils.h"
 #include "globals.h"
@@ -66,6 +67,7 @@ int main() {
     std::cout << "Welcome to " << getConfigValue("name") << "!" << std::endl;
     std::string input;
     while (true) {
+        Jobs::reap();
         std::cout << getConfigValue("name") << " " << getCurrentDirectory() << " > ";
         std::getline(std::cin, input);
         Command* cmd = parser->parse(input);

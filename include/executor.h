@@ -9,7 +9,7 @@ public:
     // Thuc thi mot Command
     static void executeCommand(std::unique_ptr<Command> cmd);
     static int handleFork(Command* cmd);
-    static void setupRedirection(const std::vector<std::string>& tokens);
+    static int setupRedirection(const SimpleCommand& cmd);
 };
 
 #endif

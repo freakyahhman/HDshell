@@ -90,6 +90,16 @@ void Parser::handleSpecialOperators(std::vector<std::string>& tokens, bool isPip
     }
     else {
         // Extract redirection and clean tokens
+
+        if (!tokens.empty() && tokens.back() == "&") {
+            simpleCmd->run_in_background = true;
+            tokens.pop_back();
+        }
+        else if (!tokens.empty() && tokens.back().size() > 1 && tokens.back().back() == '&') {
+            simpleCmd->run_in_background = true;
+            tokens.back().pop_back();
+        }
+        
         std::vector<std::string> cleanedTokens = extractRedirection(tokens);
         
         // Set name and args for simpleCmd

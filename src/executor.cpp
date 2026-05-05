@@ -1,8 +1,33 @@
 #include "executor.h"
+#include "jobs.h"
+#include <cstdio>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cstring>
+#include <string>
+#include <vector>
+
+namespace {
+std::string buildCommandString(const SimpleCommand& cmd) {
+    std::string command = cmd.name;
+
+    for (const auto& arg : cmd.args) {
+        command += " " + arg;
+    }
+
+    if (!cmd.input_file.empty()) {
+        command += " < " + cmd.input_file;
+    }
+
+    if (!cmd.output_file.empty()) {
+        command += " > " + cmd.output_file;
+    }
+
+    return command;
+}
+}
 
 void Executor::executeCommand(std::unique_ptr<Command> cmd) {
     if (cmd) {
@@ -12,6 +37,12 @@ void Executor::executeCommand(std::unique_ptr<Command> cmd) {
 }
 
 int Executor::handleFork(Command* cmd) {
+    SimpleCommand* simpleCmd = dynamic_cast<SimpleCommand*>(cmd);
+    if (simpleCmd == nullptr) {
+        std::cerr << "Error: Unsupported command type" << std::endl;
+        return -1;
+    }
+
     int pid = fork();
     if (pid < 0) {
         std::cerr << "Fork failed" << std::endl;
@@ -20,12 +51,8 @@ int Executor::handleFork(Command* cmd) {
     else if (pid == 0) {
         // Process con
         // Thiet lap redirection neu can thiet
-        SimpleCommand* simpleCmd = dynamic_cast<SimpleCommand*>(cmd);
-        if (!simpleCmd->input_file.empty()) {
-            freopen(simpleCmd->input_file.c_str(), "r", stdin);
-        }
-        if (!simpleCmd->output_file.empty()) {
-            freopen(simpleCmd->output_file.c_str(), "w", stdout);
+        if (setupRedirection(*simpleCmd) != 0) {
+            _exit(1);
         }
         
         // Chuyen doi args sang dang char*[]
@@ -44,18 +71,54 @@ int Executor::handleFork(Command* cmd) {
     
     // Process cha
     int status;
-    waitpid(pid, &status, 0); // Cho process con ket thuc
-    if (WIFEXITED(status)) {
-        cmd->exit_code = WEXITSTATUS(status); // Lay exit code cua process con
-    }
-    else {
-        cmd->exit_code = -1; // Neu process con bi loi, tra ve -1
+    if (!simpleCmd->run_in_background) {
+        waitpid(pid, &status, 0); // Cho process con ket thuc
+        if (WIFEXITED(status)) {
+            cmd->exit_code = WEXITSTATUS(status); // Lay exit code cua process con
+        }
+        else {
+            cmd->exit_code = -1; // Neu process con bi loi, tra ve -1
+        }
+
+        return cmd->exit_code;
     }
 
+    int jobId = Jobs::add(pid, buildCommandString(*simpleCmd));
+    std::cout << "[" << jobId << "] " << pid << std::endl;
+    cmd->exit_code = 0;
     return cmd->exit_code;
 }
 
-void Executor::setupRedirection(const std::vector<std::string>& tokens) {
-    // Ham nay se duoc su dung de thiet lap redirection cho lenh
-    // (chua hoan thien)
+int Executor::setupRedirection(const SimpleCommand& cmd) {
+    if (!cmd.input_file.empty()) {
+        int inputFd = open(cmd.input_file.c_str(), O_RDONLY);
+        if (inputFd < 0) {
+            perror(cmd.input_file.c_str());
+            return -1;
+        }
+
+        if (dup2(inputFd, STDIN_FILENO) < 0) {
+            perror("dup2");
+            close(inputFd);
+            return -1;
+        }
+        close(inputFd);
+    }
+
+    if (!cmd.output_file.empty()) {
+        int outputFd = open(cmd.output_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (outputFd < 0) {
+            perror(cmd.output_file.c_str());
+            return -1;
+        }
+
+        if (dup2(outputFd, STDOUT_FILENO) < 0) {
+            perror("dup2");
+            close(outputFd);
+            return -1;
+        }
+        close(outputFd);
+    }
+
+    return 0;
 }

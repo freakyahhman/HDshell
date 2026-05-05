@@ -1,9 +1,15 @@
 #include "builtins.h"
+#include "jobs.h"
 #include "path_utils.h"
 #include <fstream>
 #include <string>
 #include <iostream>
 #include <unistd.h>
+#include <filesystem>
+#include <sstream>
+#include <cctype>
+
+
 
 Builtins::Builtins() = default;
 
@@ -14,6 +20,8 @@ const std::map<std::string, std::function<int(const Command&)>> Builtins::builti
     {"clear", builtin_clear},
     {"help", builtin_help},
     {"father", builtin_father},
+    {"ps", builtin_ps},
+    {"jobs", builtin_jobs}
 };
 
 
@@ -103,6 +111,8 @@ int Builtins::builtin_help(const Command& cmd) {
     std::cout << "exit: Exit the shell." << std::endl;
     std::cout << "clear: Clear the terminal screen." << std::endl;
     std::cout << "help: Display this help message." << std::endl;
+    std::cout << "ps: Show all processes and their information include: their own ids, their parents' ids, their states." << std::endl;
+    std::cout << "jobs: Show background jobs started by this shell." << std::endl;
     std::cout << "============================================================" << std::endl;
     return 0;
 }
@@ -126,3 +136,53 @@ int Builtins::builtin_father(const Command& cmd) {
     return 0;
 }
 
+int Builtins::builtin_jobs(const Command& cmd) {
+    (void)cmd;
+
+    Jobs::reap(false);
+    Jobs::print();
+
+    return 0;
+}
+
+int Builtins::builtin_ps(const Command& cmd) {
+    (void)cmd;
+
+    std::cout << "PID\tPPID\tSTATE\tCOMMAND\n";
+
+
+    for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
+        std::string name = entry.path().filename().string();
+
+        bool isPid = true;
+
+        for (char c : name) {
+            if (!std::isdigit(c)) {
+                isPid = false;
+                break;
+            }
+        }
+
+        if (!isPid)
+            continue;
+
+        std::ifstream statFile("/proc/" + name + "/stat");
+
+        if (!statFile.is_open())
+            continue;
+        
+        
+        int pid;
+        std::string comm;
+        char state;
+        int ppid;
+
+        statFile >> pid >> comm >> state >> ppid;
+
+
+        std::cout << pid << "\t"  << ppid << "\t" << state << "\t" << comm << "\n";
+
+    }
+
+    return 0;
+}
