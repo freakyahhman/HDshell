@@ -1,8 +1,173 @@
 #include "command.h"
 #include "builtins.h"
 #include "globals.h"
+#include "jobs.h"
+#include <array>
 #include <cstdio>
+#include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
+
+namespace {
+void closeAllPipes(const std::vector<std::array<int, 2>>& pipes) {
+    for (const auto& pipeFds : pipes) {
+        if (pipeFds[0] >= 0) {
+            close(pipeFds[0]);
+        }
+        if (pipeFds[1] >= 0) {
+            close(pipeFds[1]);
+        }
+    }
+}
+
+void executeSimpleCommandInChild(SimpleCommand* simpleCmd) {
+    if (simpleCmd == nullptr || simpleCmd->name.empty()) {
+        _exit(1);
+    }
+
+    if (Executor::setupRedirection(*simpleCmd) != 0) {
+        _exit(1);
+    }
+
+    if (Builtins::isBuiltin(simpleCmd->name)) {
+        Builtins builtins;
+        int exitCode = builtins.executeBuiltin(*simpleCmd);
+        _exit(exitCode == -1 ? 1 : exitCode);
+    }
+
+    std::vector<char*> argv;
+    argv.push_back(const_cast<char*>(simpleCmd->name.c_str()));
+    for (const auto& arg : simpleCmd->args) {
+        argv.push_back(const_cast<char*>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    execvp(simpleCmd->name.c_str(), argv.data());
+    perror("execvp");
+    _exit(127);
+}
+
+std::string buildSimpleCommandString(const SimpleCommand& cmd) {
+    std::string command = cmd.name;
+
+    for (const auto& arg : cmd.args) {
+        command += " " + arg;
+    }
+
+    if (!cmd.input_file.empty()) {
+        command += " < " + cmd.input_file;
+    }
+
+    if (!cmd.output_file.empty()) {
+        command += " > " + cmd.output_file;
+    }
+
+    return command;
+}
+
+std::string buildPipelineCommandString(const PipeCommand& pipeCmd) {
+    std::string command;
+
+    for (const auto& subcommand : pipeCmd.subcommands) {
+        const SimpleCommand* simpleCmd = dynamic_cast<const SimpleCommand*>(subcommand.get());
+        if (simpleCmd == nullptr) {
+            continue;
+        }
+
+        if (!command.empty()) {
+            command += " | ";
+        }
+        command += buildSimpleCommandString(*simpleCmd);
+    }
+
+    return command;
+}
+
+int statusToExitCode(int status) {
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+
+    return -1;
+}
+
+int executePipelineForeground(const std::vector<std::unique_ptr<Command>>& subcommands, pid_t processGroupId) {
+    std::vector<std::array<int, 2>> pipes(subcommands.size() - 1, std::array<int, 2>{-1, -1});
+    for (auto& pipeFds : pipes) {
+        if (pipe(pipeFds.data()) < 0) {
+            perror("pipe");
+            closeAllPipes(pipes);
+            return -1;
+        }
+    }
+
+    std::vector<pid_t> childPids;
+    childPids.reserve(subcommands.size());
+
+    for (size_t i = 0; i < subcommands.size(); ++i) {
+        SimpleCommand* simpleCmd = dynamic_cast<SimpleCommand*>(subcommands[i].get());
+        if (simpleCmd == nullptr) {
+            std::cerr << "Error: pipeline only supports simple commands" << std::endl;
+            closeAllPipes(pipes);
+            return -1;
+        }
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            closeAllPipes(pipes);
+            for (pid_t childPid : childPids) {
+                waitpid(childPid, nullptr, 0);
+            }
+            return -1;
+        }
+
+        if (pid == 0) {
+            if (processGroupId > 0) {
+                setpgid(0, processGroupId);
+            }
+
+            if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
+                perror("dup2");
+                _exit(1);
+            }
+
+            if (i + 1 < subcommands.size() && dup2(pipes[i][1], STDOUT_FILENO) < 0) {
+                perror("dup2");
+                _exit(1);
+            }
+
+            closeAllPipes(pipes);
+            executeSimpleCommandInChild(simpleCmd);
+        }
+
+        if (processGroupId > 0) {
+            setpgid(pid, processGroupId);
+        }
+        childPids.push_back(pid);
+    }
+
+    closeAllPipes(pipes);
+
+    int lastStatus = 0;
+    for (size_t i = 0; i < childPids.size(); ++i) {
+        int status;
+        if (waitpid(childPids[i], &status, 0) < 0) {
+            perror("waitpid");
+            return -1;
+        }
+
+        if (i + 1 == childPids.size()) {
+            lastStatus = status;
+        }
+    }
+
+    return statusToExitCode(lastStatus);
+}
+}
 
 
 int SimpleCommand::execute() {
@@ -70,7 +235,37 @@ int SimpleCommand::execute() {
 
 
 int PipeCommand::execute() {
-    // Ham nay se duoc su dung de thuc thi cac lenh co pipe
-    // (chua hoan thien)
-    return 0;
+    if (subcommands.empty()) {
+        std::cerr << "Error: empty pipeline" << std::endl;
+        return -1;
+    }
+
+    if (subcommands.size() == 1) {
+        exit_code = subcommands[0]->execute();
+        return exit_code;
+    }
+
+    if (run_in_background) {
+        pid_t runnerPid = fork();
+        if (runnerPid < 0) {
+            perror("fork");
+            exit_code = -1;
+            return exit_code;
+        }
+
+        if (runnerPid == 0) {
+            setpgid(0, 0);
+            int pipelineExitCode = executePipelineForeground(subcommands, getpid());
+            _exit(pipelineExitCode == -1 ? 1 : pipelineExitCode);
+        }
+
+        setpgid(runnerPid, runnerPid);
+        int jobId = Jobs::add(runnerPid, buildPipelineCommandString(*this));
+        std::cout << "[" << jobId << "] " << runnerPid << std::endl;
+        exit_code = 0;
+        return exit_code;
+    }
+
+    exit_code = executePipelineForeground(subcommands, 0);
+    return exit_code;
 }

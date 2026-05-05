@@ -49,6 +49,10 @@ int Executor::handleFork(Command* cmd) {
         return -1;
     }
     else if (pid == 0) {
+        if (simpleCmd->run_in_background) {
+            setpgid(0, 0);
+        }
+
         // Process con
         // Thiet lap redirection neu can thiet
         if (setupRedirection(*simpleCmd) != 0) {
@@ -83,6 +87,7 @@ int Executor::handleFork(Command* cmd) {
         return cmd->exit_code;
     }
 
+    setpgid(pid, pid);
     int jobId = Jobs::add(pid, buildCommandString(*simpleCmd));
     std::cout << "[" << jobId << "] " << pid << std::endl;
     cmd->exit_code = 0;

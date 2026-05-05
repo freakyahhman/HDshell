@@ -58,6 +58,7 @@ public:
 class PipeCommand : public Command {
 public:
     std::vector<std::unique_ptr<Command>> subcommands;
+    bool run_in_background = false;
 
     PipeCommand(const std::vector<std::string>& tokens) : Command(tokens) {}
 

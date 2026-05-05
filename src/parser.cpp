@@ -10,6 +10,21 @@ bool isPipeCommand(const std::vector<std::string>& tokens) {
     return false; // Neu khong co token la pipe, tra ve false
 }
 
+bool isSpecialOperator(char c) {
+    return c == '|' || c == '<' || c == '>' || c == '&';
+}
+
+void extractBackgroundFlag(std::vector<std::string>& tokens, bool& runInBackground) {
+    if (!tokens.empty() && tokens.back() == "&") {
+        runInBackground = true;
+        tokens.pop_back();
+    }
+    else if (!tokens.empty() && tokens.back().size() > 1 && tokens.back().back() == '&') {
+        runInBackground = true;
+        tokens.back().pop_back();
+    }
+}
+
 SimpleCommand* simpleCmd = nullptr;
 PipeCommand* pipeCmd = nullptr;
 
@@ -58,6 +73,13 @@ std::vector<std::string> Parser::tokenize(const std::string& input) {
                 token.clear();
             }
         }
+        else if (quoteStack.empty() && isSpecialOperator(c)) {
+            if (!token.empty()) {
+                tokens.push_back(token);
+                token.clear();
+            }
+            tokens.push_back(std::string(1, c));
+        }
         else if (c == '"' || c == '\\') {
             if (!quoteStack.empty() && quoteStack.top() == c) {
                 quoteStack.pop();
@@ -78,27 +100,62 @@ std::vector<std::string> Parser::tokenize(const std::string& input) {
 }
 
 void Parser::handleSpecialOperators(std::vector<std::string>& tokens, bool isPipe) {
-    // TODO: handle redirection (<, >) and pipe (|)
-    (void)tokens;
-
     if (tokens.empty()) {
         return;
     }
 
     if (isPipe) {
-        // Handle pipe command
+        bool runInBackground = false;
+        extractBackgroundFlag(tokens, runInBackground);
+        pipeCmd->run_in_background = runInBackground;
+
+        std::vector<std::string> segmentTokens;
+
+        auto appendSubcommand = [&](std::vector<std::string>& segment) -> bool {
+            if (segment.empty()) {
+                std::cerr << "Syntax error: empty command in pipeline" << std::endl;
+                return false;
+            }
+
+            auto subcommand = std::make_unique<SimpleCommand>(std::vector<std::string>{});
+            SimpleCommand* previousSimpleCmd = simpleCmd;
+            simpleCmd = subcommand.get();
+
+            std::vector<std::string> cleanedTokens = extractRedirection(segment);
+            simpleCmd = previousSimpleCmd;
+
+            if (cleanedTokens.empty()) {
+                std::cerr << "Syntax error: empty command in pipeline" << std::endl;
+                return false;
+            }
+
+            subcommand->name = cleanedTokens[0];
+            subcommand->args.assign(cleanedTokens.begin() + 1, cleanedTokens.end());
+            pipeCmd->subcommands.push_back(std::move(subcommand));
+            return true;
+        };
+
+        for (const std::string& token : tokens) {
+            if (token == "|") {
+                if (!appendSubcommand(segmentTokens)) {
+                    pipeCmd->subcommands.clear();
+                    return;
+                }
+                segmentTokens.clear();
+            }
+            else {
+                segmentTokens.push_back(token);
+            }
+        }
+
+        if (!appendSubcommand(segmentTokens)) {
+            pipeCmd->subcommands.clear();
+        }
     }
     else {
         // Extract redirection and clean tokens
 
-        if (!tokens.empty() && tokens.back() == "&") {
-            simpleCmd->run_in_background = true;
-            tokens.pop_back();
-        }
-        else if (!tokens.empty() && tokens.back().size() > 1 && tokens.back().back() == '&') {
-            simpleCmd->run_in_background = true;
-            tokens.back().pop_back();
-        }
+        extractBackgroundFlag(tokens, simpleCmd->run_in_background);
         
         std::vector<std::string> cleanedTokens = extractRedirection(tokens);
         

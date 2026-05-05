@@ -40,7 +40,7 @@ std::string joinArgs(const std::vector<std::string>& args, size_t start) {
     return result;
 }
 
-bool resolvePidTarget(const std::string& target, const char* commandName, pid_t& pid) {
+bool resolvePidTarget(const std::string& target, const char* commandName, pid_t& signalPid, pid_t& jobPid) {
     if (!target.empty() && target[0] == '%') {
         int jobId;
         if (!parsePositiveInt(target.substr(1), jobId)) {
@@ -48,12 +48,13 @@ bool resolvePidTarget(const std::string& target, const char* commandName, pid_t&
             return false;
         }
 
-        pid = Jobs::getPidByJobId(jobId);
-        if (pid < 0) {
+        jobPid = Jobs::getPidByJobId(jobId);
+        if (jobPid < 0) {
             std::cerr << commandName << ": job not found: " << target << std::endl;
             return false;
         }
 
+        signalPid = -jobPid;
         return true;
     }
 
@@ -63,7 +64,8 @@ bool resolvePidTarget(const std::string& target, const char* commandName, pid_t&
         return false;
     }
 
-    pid = static_cast<pid_t>(parsedPid);
+    signalPid = static_cast<pid_t>(parsedPid);
+    jobPid = signalPid;
     return true;
 }
 
@@ -81,17 +83,18 @@ int signalOneProcess(const Command& cmd, const char* commandName, int signalNumb
 
     Jobs::reap(false);
 
-    pid_t pid;
-    if (!resolvePidTarget(simpleCmd->args[0], commandName, pid)) {
+    pid_t signalPid;
+    pid_t jobPid;
+    if (!resolvePidTarget(simpleCmd->args[0], commandName, signalPid, jobPid)) {
         return -1;
     }
 
-    if (::kill(pid, signalNumber) != 0) {
+    if (::kill(signalPid, signalNumber) != 0) {
         perror(commandName);
         return -1;
     }
 
-    Jobs::setStatusByPid(pid, newStatus);
+    Jobs::setStatusByPid(jobPid, newStatus);
     return 0;
 }
 }
@@ -189,7 +192,7 @@ int Builtins::builtin_exit(const Command& cmd) {
 
 int Builtins::builtin_clear(const Command& cmd) {
     (void)cmd;
-    std::cout << "\033[2J\033[1;1H"; // ANSI escape code to clear the screen
+    std::cout << "\033[H\033[2J\033[3J" << std::flush;
     
     return 0;
 }
@@ -317,22 +320,23 @@ int Builtins::builtin_kill(const Command& cmd) {
 
     for (size_t i = targetIndex; i < simpleCmd->args.size(); ++i) {
         const std::string& target = simpleCmd->args[i];
-        pid_t pid;
+        pid_t signalPid;
+        pid_t jobPid;
 
-        if (!resolvePidTarget(target, "kill", pid)) {
+        if (!resolvePidTarget(target, "kill", signalPid, jobPid)) {
             exitCode = -1;
             continue;
         }
 
-        if (::kill(pid, signalNumber) != 0) {
+        if (::kill(signalPid, signalNumber) != 0) {
             perror("kill");
             exitCode = -1;
         }
         else if (signalNumber == SIGSTOP) {
-            Jobs::setStatusByPid(pid, Jobs::Status::Stopped);
+            Jobs::setStatusByPid(jobPid, Jobs::Status::Stopped);
         }
         else if (signalNumber == SIGCONT) {
-            Jobs::setStatusByPid(pid, Jobs::Status::Running);
+            Jobs::setStatusByPid(jobPid, Jobs::Status::Running);
         }
     }
 
@@ -383,7 +387,7 @@ int Builtins::builtin_killall(const Command& cmd) {
         }
 
         for (pid_t pid : pids) {
-            if (::kill(pid, signalNumber) != 0) {
+            if (::kill(-pid, signalNumber) != 0) {
                 perror("killall");
                 exitCode = -1;
             }
