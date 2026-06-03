@@ -6,20 +6,23 @@
 #include "command.h"
 #include "path_utils.h"
 #include "globals.h"
+
 #include <cctype>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <unistd.h>
 
 std::string getCurrentDirectory() {
     char buffer[1024];
+
     if (getcwd(buffer, sizeof(buffer)) != nullptr) {
         return std::string(buffer);
-    } else {
-        perror("getcwd");
-        return "";
     }
+
+    perror("getcwd");
+    return "";
 }
 
 void printPrompt() {
@@ -42,11 +45,13 @@ std::unique_ptr<Parser> parser = std::make_unique<Parser>();
 namespace {
 std::string trimLine(const std::string& line) {
     size_t start = 0;
+
     while (start < line.size() && std::isspace(static_cast<unsigned char>(line[start]))) {
         ++start;
     }
 
     size_t end = line.size();
+
     while (end > start && std::isspace(static_cast<unsigned char>(line[end - 1]))) {
         --end;
     }
@@ -56,6 +61,7 @@ std::string trimLine(const std::string& line) {
 
 bool hasShellScriptExtension(const std::string& path) {
     const std::string extension = ".sh";
+
     if (path.size() < extension.size()) {
         return false;
     }
@@ -65,18 +71,60 @@ bool hasShellScriptExtension(const std::string& path) {
 
 bool shouldSkipScriptLine(const std::string& line) {
     std::string trimmed = trimLine(line);
+
     return trimmed.empty() || trimmed.rfind("#!", 0) == 0 || trimmed[0] == '#';
 }
 
+bool isScriptCommand(const std::string& input) {
+    std::string trimmed = trimLine(input);
+
+    if (trimmed.empty()) {
+        return false;
+    }
+
+    // Chỉ nhận dạng lệnh kiểu:
+    // ./test.sh
+    // /home/user/test.sh
+    //
+    // Không xử lý:
+    // ./test.sh arg1 arg2
+    if (trimmed.find(' ') != std::string::npos || trimmed.find('\t') != std::string::npos) {
+        return false;
+    }
+
+    if (!hasShellScriptExtension(trimmed)) {
+        return false;
+    }
+
+    return trimmed.rfind("./", 0) == 0 || trimmed[0] == '/';
+}
+
+int runScriptFile(const std::string& scriptPath);
+
 int executeInputLine(const std::string& input) {
-    Command* parsedCommand = parser->parse(input);
+    std::string trimmed = trimLine(input);
+
+    if (trimmed.empty()) {
+        return 0;
+    }
+
+    // Cho phép chạy script trong tinyshell bằng:
+    // ./test.sh
+    if (isScriptCommand(trimmed)) {
+        return runScriptFile(trimmed);
+    }
+
+    Command* parsedCommand = parser->parse(trimmed);
+
     if (parsedCommand == nullptr) {
         return 0;
     }
 
     std::unique_ptr<Command> command(parsedCommand);
+
     int exitCode = command->execute();
     command->exit_code = exitCode;
+
     return exitCode;
 }
 
@@ -87,6 +135,7 @@ int runScriptFile(const std::string& scriptPath) {
     }
 
     std::ifstream script(scriptPath);
+
     if (!script.is_open()) {
         perror(scriptPath.c_str());
         return 1;
@@ -94,14 +143,17 @@ int runScriptFile(const std::string& scriptPath) {
 
     std::string line;
     int lastExitCode = 0;
+
     while (std::getline(script, line)) {
         Jobs::reap();
+
         if (shouldSkipScriptLine(line)) {
             continue;
         }
 
         lastExitCode = executeInputLine(line);
     }
+
     Jobs::reap();
 
     return lastExitCode < 0 ? 1 : lastExitCode;
@@ -116,19 +168,26 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Vẫn giữ hỗ trợ chạy kiểu:
+    // ./tinyshell test.sh
     if (argc == 2) {
         return runScriptFile(argv[1]);
     }
 
     std::cout << "Welcome to " << Config::get("name") << "!" << std::endl;
+
     std::string input;
+
     while (true) {
         Jobs::reap();
+
         printPrompt();
+
         if (!std::getline(std::cin, input)) {
             std::cout << std::endl;
             break;
         }
+
         executeInputLine(input);
     }
 
