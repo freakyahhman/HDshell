@@ -17,6 +17,7 @@ HDshell là một shell đơn giản viết bằng C++17 để minh họa các c
 - Điều khiển tiến trình bằng signal.
 - Pipe, redirection và builtin command.
 - Chạy file script `.sh` theo từng dòng lệnh.
+- Biến môi trường, history, date/time và job control cơ bản.
 
 Shell không nhằm thay thế Bash/Zsh. Mục tiêu chính là làm rõ logic xử lý command và vòng đời tiến trình.
 
@@ -41,6 +42,7 @@ Shell không nhằm thay thế Bash/Zsh. Mục tiêu chính là làm rõ logic x
 |   |-- config.h
 |   |-- executor.h
 |   |-- globals.h
+|   |-- history.h
 |   |-- jobs.h
 |   |-- parser.h
 |   `-- path_utils.h
@@ -49,6 +51,7 @@ Shell không nhằm thay thế Bash/Zsh. Mục tiêu chính là làm rõ logic x
     |-- command.cpp
     |-- config.cpp
     |-- executor.cpp
+    |-- history.cpp
     |-- jobs.cpp
     |-- myShell.cpp
     `-- parser.cpp
@@ -108,11 +111,14 @@ docker run -it --rm tinyshell-ubuntu
 - `src/executor.cpp`: xử lý `fork`, `execvp`, redirection cho external command.
 - `src/builtins.cpp`: cài đặt builtin command.
 - `src/jobs.cpp`: job table cho background process, cập nhật trạng thái bằng `waitpid`.
+- `src/history.cpp`: quản lý history trong bộ nhớ, sync với `history.txt` và giới hạn 1000 dòng.
 - `src/config.cpp`: đọc và ghi `data/config.json`.
 
 ## Luồng Xử Lý Command
 
 1. `myShell.cpp` đọc một dòng input từ người dùng hoặc một dòng trong file `.sh`.
+   - Khi chạy tương tác, shell dùng raw terminal input để hỗ trợ phím mũi tên Up/Down duyệt history.
+   - Khi stdin không phải terminal, shell fallback về `std::getline` để vẫn chạy tốt với pipe/script.
 2. `Parser::parse` tách input thành token.
 3. Nếu có `|`, parser tạo `PipeCommand`; ngược lại tạo `SimpleCommand`.
 4. Parser tách các toán tử đặc biệt:
@@ -120,6 +126,7 @@ docker run -it --rm tinyshell-ubuntu
    - `> file`: output redirection.
    - `&`: chạy background.
    - `|`: chia command thành các stage trong pipeline.
+   - `$VAR`, `${VAR}`, `$$`: mở rộng biến môi trường/PID shell.
 5. `Executor::executeCommand` gọi `cmd->execute()`.
 6. Command tự quyết định cách chạy:
    - Builtin chạy trong shell process nếu là command đơn.
@@ -190,10 +197,21 @@ Logic:
 
 Liệt kê các background job do chính HDshell tạo ra.
 
+Hỗ trợ:
+
+```bash
+jobs
+jobs -c
+jobs -d %1
+jobs rm %1
+```
+
 Logic:
 
 - Trước khi in danh sách, gọi `Jobs::reap(false)` để cập nhật các job đã kết thúc.
-- In job id, PID, status và command.
+- In job id, process group id, status và command.
+- `jobs -c` xóa toàn bộ job đã `Done` hoặc `Terminated`.
+- `jobs -d <pid|%job_id>` hoặc `jobs rm <pid|%job_id>` xóa một job đã kết thúc.
 
 Trạng thái job:
 
@@ -259,6 +277,103 @@ resume 1234
 resume %1
 ```
 
+### `fg`
+
+Đưa một background/stopped job ra foreground.
+
+Ví dụ:
+
+```bash
+sleep 30 &
+fg %1
+```
+
+Nếu không truyền target, `fg` dùng active job gần nhất.
+
+### `bg`
+
+Tiếp tục một stopped job ở background.
+
+Ví dụ:
+
+```bash
+sleep 30
+# bấm Ctrl-Z
+bg %1
+```
+
+Nếu không truyền target, `bg` dùng active job gần nhất.
+
+### Environment Variables
+
+HDshell hỗ trợ xem, set, unset và mở rộng biến môi trường.
+
+Ví dụ:
+
+```bash
+env
+printenv PATH
+export EDITOR=vim
+export PATH=/home/user/bin:$PATH
+setenv GREETING hello world
+unset EDITOR
+echo $PATH
+echo ${GREETING}
+echo $$
+```
+
+Logic:
+
+- `env`: in toàn bộ environment hiện tại.
+- `printenv [name...]`: in toàn bộ environment hoặc giá trị từng biến.
+- `export NAME=value`: set biến môi trường.
+- `export NAME value`: set biến theo cú pháp hai tham số.
+- `setenv NAME value...`: set biến, nối phần value bằng dấu cách.
+- `unset NAME...` hoặc `unsetenv NAME...`: xóa biến môi trường.
+- Biến được set có hiệu lực trong shell hiện tại và các process con.
+
+### `date` và `time`
+
+In ngày hoặc giờ hiện tại theo local time.
+
+Ví dụ:
+
+```bash
+date
+date +%Y-%m-%d
+time
+time +%H:%M:%S
+```
+
+Logic:
+
+- `date` mặc định in `YYYY-MM-DD`.
+- `time` mặc định in `HH:MM:SS`.
+- Có thể truyền format dạng `strftime`, có hoặc không có dấu `+` ở đầu.
+
+### `history`
+
+Quản lý history command trong phiên shell.
+
+Ví dụ:
+
+```bash
+history
+history limit
+history set 500
+history clear
+```
+
+Logic:
+
+- Mặc định shell giữ tối đa 1000 dòng history.
+- `history set <1-1000>` đổi số dòng shell hiện tại hiển thị và duyệt bằng phím mũi tên.
+- `history clear` xóa history trong bộ nhớ và file chung.
+- Khi chạy tương tác, bấm Up/Down để di chuyển trong history. Bấm Enter chạy lệnh đang chọn và vị trí history reset về cuối.
+- History được lưu ở file `history.txt` cạnh binary `tinyshell`.
+- File `history.txt` luôn được giới hạn tối đa 1000 dòng mới nhất và được ghi dưới `flock` để nhiều shell chạy song song có thể đồng bộ.
+- `history.txt` là file runtime cá nhân, đã được ignore khỏi git.
+
 ### `change`
 
 Thay đổi cấu hình trong `data/config.json`.
@@ -268,19 +383,12 @@ Ví dụ:
 ```bash
 change name MyShell
 change color red
-change scheme zsh
-change color user green
-change color host blue
-change color path cyan
-change color symbol magenta
 ```
 
 Logic:
 
 - `change name`: cập nhật key `name`.
-- `change color`: cập nhật màu prompt kiểu default.
-- `change scheme`: đổi `color_scheme`.
-- `change color user|host|path|symbol`: cập nhật màu từng thành phần prompt kiểu zsh.
+- `change color`: cập nhật màu prompt.
 - Giá trị mới được ghi lại vào `data/config.json` và có hiệu lực ngay trong runtime.
 
 ## External Commands
@@ -339,6 +447,7 @@ Logic:
 - Parser chia input theo `|`.
 - Mỗi stage là một `SimpleCommand`.
 - `PipeCommand::execute` tạo `pipe()`, fork từng stage, nối stdout của stage trước vào stdin của stage sau bằng `dup2`.
+- Foreground pipeline chạy trong một process group riêng. Shell nhường terminal cho process group đó khi terminal hỗ trợ.
 - Parent đóng tất cả fd pipe và `waitpid` các child.
 - Exit code của pipeline lấy theo command cuối cùng.
 
@@ -367,9 +476,10 @@ Mỗi background job gồm:
 
 ```text
 job id
-pid
+process group id
 status
 command
+tracked child pids
 ```
 
 Shell gọi `Jobs::reap()` trước mỗi prompt để thu gom tiến trình đã kết thúc bằng:
@@ -383,6 +493,7 @@ Việc này giúp:
 - Cập nhật status `Done`, `Terminated`, `Stopped`, `Running`.
 - Hạn chế zombie process.
 - Cho phép `jobs`, `kill`, `stop`, `resume` làm việc với `%job_id`.
+- Hỗ trợ `fg`/`bg` và foreground process group bằng `tcsetpgrp` khi chạy trong terminal tương tác.
 
 ## Config Và Prompt
 
@@ -395,7 +506,7 @@ Ví dụ:
     "name": "TaTamShell",
     "color": "default",
     "version": "1.0",
-    "color_scheme": "zsh",
+    "color_scheme": "dark",
     "prompt": {
         "user": "green",
         "host": "blue",
@@ -406,10 +517,7 @@ Ví dụ:
 }
 ```
 
-Prompt có hai kiểu chính:
-
-- `default`: hiện `name current/path >`.
-- `zsh`: hiện `user@host path %` với màu riêng cho từng phần.
+Prompt hiện theo dạng `name current/path >`. Màu prompt lấy từ key `color`.
 
 ## Ưu Điểm Hiện Tại
 
@@ -422,14 +530,17 @@ Prompt có hai kiểu chính:
 - Hỗ trợ redirection cho cả external command và builtin command.
 - Hỗ trợ chạy file script `.sh` đơn giản, dùng lại toàn bộ parser/executor hiện có.
 - Config có thể thay đổi runtime bằng builtin `change`.
+- Có history persistent, giới hạn 1000 dòng, duyệt bằng Up/Down.
+- Có mở rộng biến môi trường cơ bản.
+- Có `fg`/`bg` và terminal foreground process group khi chạy tương tác.
 
 ## Điểm Yếu Và Giới Hạn
 
 - Parser còn đơn giản:
   - Quote/escape chưa đầy đủ như Bash/Zsh.
-  - Chưa hỗ trợ biến môi trường `$VAR`.
   - Chưa hỗ trợ command substitution `$(...)`.
   - Chưa hỗ trợ wildcard expansion `*`.
+  - Chưa có biến shell nội bộ riêng, chỉ dùng environment variables.
 - Redirection còn hạn chế:
   - Chưa có `>>`, `2>`, `2>&1`, heredoc.
 - Chưa có logical operator:
@@ -439,13 +550,12 @@ Prompt có hai kiểu chính:
   - Chưa có biến shell nội bộ.
   - Chưa có cơ chế dừng script khi một dòng lỗi.
 - Job control chưa đầy đủ như shell thật:
-  - Chưa có `fg`, `bg`.
-  - Chưa điều khiển terminal foreground process group bằng `tcsetpgrp`.
+  - Chưa hỗ trợ mọi hành vi phức tạp của terminal job control như Bash/Zsh.
   - `killall` chỉ áp dụng với job do HDshell tạo, không phải toàn hệ thống.
 - Config parser chỉ đủ cho file config hiện tại:
   - Chưa phải JSON parser tổng quát.
   - Chỉ xử lý các key string đơn giản.
-- Chưa có history command mặc dù `history_size` có trong config.
+- Line editor mới hỗ trợ nhập, backspace và Up/Down history; chưa có left/right cursor editing hoặc autocomplete.
 - Chưa có autocomplete.
 - Chưa có test suite tự động.
 
@@ -463,8 +573,14 @@ sleep 30 &
 jobs
 stop %1
 resume %1
+fg %1
 kill %1
-change scheme zsh
-change color path cyan
+history
+history set 500
+export PATH=/home/user/bin:$PATH
+date
+time
+jobs -c
+change color cyan
 exit
 ```

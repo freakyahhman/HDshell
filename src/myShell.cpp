@@ -2,6 +2,7 @@
 #include "builtins.h"
 #include "config.h"
 #include "executor.h"
+#include "history.h"
 #include "jobs.h"
 #include "command.h"
 #include "path_utils.h"
@@ -12,7 +13,9 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <termios.h>
 #include <unistd.h>
+#include <vector>
 
 std::string getCurrentDirectory() {
     char buffer[1024];
@@ -25,18 +28,24 @@ std::string getCurrentDirectory() {
     return "";
 }
 
-void printPrompt() {
+std::string buildPrompt() {
     std::string shellName = Config::get("name");
     std::string shellColor = Config::ansiColorCode(Config::get("color"));
+    std::string prompt;
 
     if (!shellColor.empty()) {
-        std::cout << shellColor << shellName << Config::resetColorCode();
+        prompt += shellColor + shellName + Config::resetColorCode();
     }
     else {
-        std::cout << shellName;
+        prompt += shellName;
     }
 
-    std::cout << " " << getCurrentDirectory() << " > ";
+    prompt += " " + getCurrentDirectory() + " > ";
+    return prompt;
+}
+
+void printPrompt() {
+    std::cout << buildPrompt();
 }
 
 std::unique_ptr<Executor> executor = std::make_unique<Executor>();
@@ -97,6 +106,127 @@ bool isScriptCommand(const std::string& input) {
     }
 
     return trimmed.rfind("./", 0) == 0 || trimmed[0] == '/';
+}
+
+void redrawInputLine(const std::string& prompt, const std::string& line) {
+    std::cout << "\r\033[2K" << prompt << line << std::flush;
+}
+
+bool readInteractiveInputLine(const std::string& prompt, std::string& input) {
+    if (!isatty(STDIN_FILENO)) {
+        return static_cast<bool>(std::getline(std::cin, input));
+    }
+
+    termios originalMode {};
+    if (tcgetattr(STDIN_FILENO, &originalMode) < 0) {
+        return static_cast<bool>(std::getline(std::cin, input));
+    }
+
+    termios rawMode = originalMode;
+    rawMode.c_lflag &= static_cast<unsigned int>(~(ECHO | ICANON));
+    rawMode.c_cc[VMIN] = 1;
+    rawMode.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &rawMode) < 0) {
+        return static_cast<bool>(std::getline(std::cin, input));
+    }
+
+    auto restoreTerminal = [&originalMode]() {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalMode);
+    };
+
+    input.clear();
+    std::string draftLine;
+    std::vector<std::string> historyEntries = History::getEntries();
+    size_t historyIndex = historyEntries.size();
+
+    while (true) {
+        char c;
+        ssize_t bytesRead = read(STDIN_FILENO, &c, 1);
+
+        if (bytesRead <= 0) {
+            restoreTerminal();
+            return false;
+        }
+
+        if (c == '\n' || c == '\r') {
+            restoreTerminal();
+            std::cout << std::endl;
+            return true;
+        }
+
+        if (c == 4) {
+            if (input.empty()) {
+                restoreTerminal();
+                return false;
+            }
+            continue;
+        }
+
+        if (c == 8 || c == 127) {
+            if (!input.empty()) {
+                input.pop_back();
+                redrawInputLine(prompt, input);
+            }
+            continue;
+        }
+
+        if (c == '\033') {
+            char sequence[2];
+            if (read(STDIN_FILENO, &sequence[0], 1) <= 0 ||
+                read(STDIN_FILENO, &sequence[1], 1) <= 0) {
+                continue;
+            }
+
+            if (sequence[0] != '[') {
+                continue;
+            }
+
+            if (sequence[1] == 'A') {
+                historyEntries = History::getEntries();
+                if (historyEntries.empty()) {
+                    continue;
+                }
+
+                if (historyIndex > historyEntries.size()) {
+                    historyIndex = historyEntries.size();
+                }
+
+                if (historyIndex == historyEntries.size()) {
+                    draftLine = input;
+                }
+
+                if (historyIndex > 0) {
+                    --historyIndex;
+                    input = historyEntries[historyIndex];
+                    redrawInputLine(prompt, input);
+                }
+                continue;
+            }
+
+            if (sequence[1] == 'B') {
+                historyEntries = History::getEntries();
+                if (historyIndex < historyEntries.size()) {
+                    ++historyIndex;
+                    if (historyIndex == historyEntries.size()) {
+                        input = draftLine;
+                    }
+                    else {
+                        input = historyEntries[historyIndex];
+                    }
+                    redrawInputLine(prompt, input);
+                }
+                continue;
+            }
+
+            continue;
+        }
+
+        if (std::isprint(static_cast<unsigned char>(c))) {
+            input += c;
+            std::cout << c << std::flush;
+        }
+    }
 }
 
 int runScriptFile(const std::string& scriptPath);
@@ -162,6 +292,8 @@ int runScriptFile(const std::string& scriptPath) {
 
 int main(int argc, char* argv[]) {
     Config::load(path_utils::resolveDataFilePath("config.json"));
+    History::initialize(path_utils::resolveShellFilePath("history.txt"));
+    Executor::initializeShellJobControl();
 
     if (argc > 2) {
         std::cerr << "Usage: " << argv[0] << " [script.sh]" << std::endl;
@@ -181,13 +313,15 @@ int main(int argc, char* argv[]) {
     while (true) {
         Jobs::reap();
 
-        printPrompt();
+        std::string prompt = buildPrompt();
+        std::cout << prompt << std::flush;
 
-        if (!std::getline(std::cin, input)) {
+        if (!readInteractiveInputLine(prompt, input)) {
             std::cout << std::endl;
             break;
         }
 
+        History::add(trimLine(input));
         executeInputLine(input);
     }
 

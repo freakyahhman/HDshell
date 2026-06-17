@@ -1,7 +1,11 @@
 #include "builtins.h"
 #include "config.h"
+#include "executor.h"
+#include "history.h"
 #include "jobs.h"
 #include "path_utils.h"
+#include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <string>
 #include <iostream>
@@ -10,6 +14,8 @@
 #include <sstream>
 #include <cctype>
 #include <signal.h>
+
+extern char **environ;
 
 namespace {
 bool parsePositiveInt(const std::string& value, int& result) {
@@ -97,6 +103,126 @@ int signalOneProcess(const Command& cmd, const char* commandName, int signalNumb
     Jobs::setStatusByPid(jobPid, newStatus);
     return 0;
 }
+
+const SimpleCommand* requireSimpleCommand(const Command& cmd) {
+    const SimpleCommand* simpleCmd = dynamic_cast<const SimpleCommand*>(&cmd);
+    if (simpleCmd == nullptr) {
+        std::cerr << "Error: Unsupported command type" << std::endl;
+    }
+
+    return simpleCmd;
+}
+
+bool isEnvNameStart(char c) {
+    return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
+}
+
+bool isEnvNameChar(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+}
+
+bool isValidEnvName(const std::string& name) {
+    if (name.empty() || !isEnvNameStart(name[0])) {
+        return false;
+    }
+
+    for (char c : name) {
+        if (!isEnvNameChar(c)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool splitEnvAssignment(const std::string& assignment, std::string& name, std::string& value) {
+    size_t equalPos = assignment.find('=');
+    if (equalPos == std::string::npos) {
+        return false;
+    }
+
+    name = assignment.substr(0, equalPos);
+    value = assignment.substr(equalPos + 1);
+    return true;
+}
+
+void printEnvironment() {
+    for (char** env = environ; env != nullptr && *env != nullptr; ++env) {
+        std::cout << *env << std::endl;
+    }
+}
+
+bool resolveJobTarget(const std::string& target, const char* commandName, Jobs::Job& job) {
+    if (target.empty()) {
+        if (!Jobs::getMostRecentJob(job)) {
+            std::cerr << commandName << ": no current job" << std::endl;
+            return false;
+        }
+
+        return true;
+    }
+
+    if (target[0] == '%') {
+        int jobId;
+        if (!parsePositiveInt(target.substr(1), jobId)) {
+            std::cerr << commandName << ": invalid job id: " << target << std::endl;
+            return false;
+        }
+
+        if (!Jobs::getJobByJobId(jobId, job)) {
+            std::cerr << commandName << ": job not found: " << target << std::endl;
+            return false;
+        }
+
+        return true;
+    }
+
+    int parsedPid;
+    if (!parsePositiveInt(target, parsedPid)) {
+        std::cerr << commandName << ": invalid pid: " << target << std::endl;
+        return false;
+    }
+
+    if (!Jobs::getJobByPid(static_cast<pid_t>(parsedPid), job)) {
+        std::cerr << commandName << ": job not found: " << target << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+int printFormattedTime(const Command& cmd, const char* commandName, const char* defaultFormat) {
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
+
+    if (simpleCmd->args.size() > 1) {
+        std::cerr << "Usage: " << commandName << " [+format]" << std::endl;
+        return -1;
+    }
+
+    std::string format = simpleCmd->args.empty() ? defaultFormat : simpleCmd->args[0];
+    if (!format.empty() && format[0] == '+') {
+        format.erase(0, 1);
+    }
+
+    std::time_t now = std::time(nullptr);
+    std::tm localTime {};
+    if (localtime_r(&now, &localTime) == nullptr) {
+        std::cerr << commandName << ": failed to read local time" << std::endl;
+        return -1;
+    }
+
+    char buffer[256];
+    if (std::strftime(buffer, sizeof(buffer), format.c_str(), &localTime) == 0) {
+        std::cerr << commandName << ": formatted output is too long" << std::endl;
+        return -1;
+    }
+
+    std::cout << buffer << std::endl;
+    return 0;
+}
 }
 
 Builtins::Builtins() = default;
@@ -114,6 +240,17 @@ const std::map<std::string, std::function<int(const Command&)>> Builtins::builti
     {"killall", builtin_killall},
     {"stop", builtin_stop},
     {"resume", builtin_resume},
+    {"fg", builtin_fg},
+    {"bg", builtin_bg},
+    {"env", builtin_env},
+    {"printenv", builtin_printenv},
+    {"export", builtin_export},
+    {"setenv", builtin_setenv},
+    {"unset", builtin_unset},
+    {"unsetenv", builtin_unset},
+    {"date", builtin_date},
+    {"time", builtin_time},
+    {"history", builtin_history},
     {"change", builtin_change}
 };
 
@@ -206,10 +343,17 @@ int Builtins::builtin_help(const Command& cmd) {
     std::cout << "help: Display this help message." << std::endl;
     std::cout << "ps: Show all processes and their information include: their own ids, their parents' ids, their states." << std::endl;
     std::cout << "jobs: Show background jobs started by this shell." << std::endl;
+    std::cout << "jobs -c: Remove finished jobs from the job table." << std::endl;
+    std::cout << "jobs -d <pid|%job_id>: Remove one finished job from the job table." << std::endl;
     std::cout << "kill: Send a signal to a PID or background job." << std::endl;
     std::cout << "killall: Send a signal to active background jobs by command name." << std::endl;
     std::cout << "stop: Stop a PID or background job." << std::endl;
     std::cout << "resume: Resume a PID or background job." << std::endl;
+    std::cout << "fg: Move a background/stopped job to the foreground." << std::endl;
+    std::cout << "bg: Continue a stopped job in the background." << std::endl;
+    std::cout << "env/printenv/export/setenv/unset: Manage environment variables." << std::endl;
+    std::cout << "date/time: Show current date or time. Optional format: +%Y-%m-%d." << std::endl;
+    std::cout << "history: Show command history. Use Up/Down arrows, history set <1-1000>, or history clear." << std::endl;
     std::cout << "change: Change shell name or prompt color." << std::endl;
     std::cout << "============================================================" << std::endl;
     return 0;
@@ -235,11 +379,318 @@ int Builtins::builtin_father(const Command& cmd) {
 }
 
 int Builtins::builtin_jobs(const Command& cmd) {
-    (void)cmd;
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
 
     Jobs::reap(false);
-    Jobs::print();
 
+    if (simpleCmd->args.empty()) {
+        Jobs::print();
+        return 0;
+    }
+
+    const std::string& action = simpleCmd->args[0];
+
+    if (action == "-c" || action == "--clear") {
+        int removed = Jobs::removeFinished();
+        std::cout << "Removed " << removed << " finished job(s)" << std::endl;
+        return 0;
+    }
+
+    if (action == "-d" || action == "--delete" || action == "rm") {
+        if (simpleCmd->args.size() != 2) {
+            std::cerr << "Usage: jobs [-c|--clear] | jobs [-d|--delete|rm] <pid|%job_id>" << std::endl;
+            return -1;
+        }
+
+        Jobs::Job job;
+        if (!resolveJobTarget(simpleCmd->args[1], "jobs", job)) {
+            return -1;
+        }
+
+        if (Jobs::isActive(job.status)) {
+            std::cerr << "jobs: refusing to remove active job: %" << job.id << std::endl;
+            return -1;
+        }
+
+        Jobs::removeByJobId(job.id, false);
+        return 0;
+    }
+
+    std::cerr << "Usage: jobs [-c|--clear] | jobs [-d|--delete|rm] <pid|%job_id>" << std::endl;
+    return -1;
+}
+
+int Builtins::builtin_env(const Command& cmd) {
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
+
+    if (!simpleCmd->args.empty()) {
+        std::cerr << "Usage: env" << std::endl;
+        return -1;
+    }
+
+    printEnvironment();
+    return 0;
+}
+
+int Builtins::builtin_printenv(const Command& cmd) {
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
+
+    if (simpleCmd->args.empty()) {
+        printEnvironment();
+        return 0;
+    }
+
+    int exitCode = 0;
+    for (const std::string& name : simpleCmd->args) {
+        const char* value = getenv(name.c_str());
+        if (value == nullptr) {
+            exitCode = -1;
+            continue;
+        }
+
+        std::cout << value << std::endl;
+    }
+
+    return exitCode;
+}
+
+int Builtins::builtin_export(const Command& cmd) {
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
+
+    if (simpleCmd->args.empty()) {
+        printEnvironment();
+        return 0;
+    }
+
+    int exitCode = 0;
+
+    for (size_t i = 0; i < simpleCmd->args.size(); ++i) {
+        std::string name;
+        std::string value;
+
+        if (!splitEnvAssignment(simpleCmd->args[i], name, value)) {
+            if (simpleCmd->args.size() == 2 && i == 0) {
+                name = simpleCmd->args[0];
+                value = simpleCmd->args[1];
+                i = 1;
+            }
+            else {
+                name = simpleCmd->args[i];
+                const char* existingValue = getenv(name.c_str());
+                value = existingValue == nullptr ? "" : existingValue;
+            }
+        }
+
+        if (!isValidEnvName(name)) {
+            std::cerr << "export: invalid variable name: " << name << std::endl;
+            exitCode = -1;
+            continue;
+        }
+
+        if (::setenv(name.c_str(), value.c_str(), 1) != 0) {
+            perror("export");
+            exitCode = -1;
+        }
+    }
+
+    return exitCode;
+}
+
+int Builtins::builtin_setenv(const Command& cmd) {
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
+
+    if (simpleCmd->args.size() < 2) {
+        std::cerr << "Usage: setenv <name> <value>" << std::endl;
+        return -1;
+    }
+
+    const std::string& name = simpleCmd->args[0];
+    std::string value = joinArgs(simpleCmd->args, 1);
+
+    if (!isValidEnvName(name)) {
+        std::cerr << "setenv: invalid variable name: " << name << std::endl;
+        return -1;
+    }
+
+    if (::setenv(name.c_str(), value.c_str(), 1) != 0) {
+        perror("setenv");
+        return -1;
+    }
+
+    return 0;
+}
+
+int Builtins::builtin_unset(const Command& cmd) {
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
+
+    if (simpleCmd->args.empty()) {
+        std::cerr << "Usage: unset <name> ..." << std::endl;
+        return -1;
+    }
+
+    int exitCode = 0;
+    for (const std::string& name : simpleCmd->args) {
+        if (!isValidEnvName(name)) {
+            std::cerr << "unset: invalid variable name: " << name << std::endl;
+            exitCode = -1;
+            continue;
+        }
+
+        if (::unsetenv(name.c_str()) != 0) {
+            perror("unset");
+            exitCode = -1;
+        }
+    }
+
+    return exitCode;
+}
+
+int Builtins::builtin_date(const Command& cmd) {
+    return printFormattedTime(cmd, "date", "%Y-%m-%d");
+}
+
+int Builtins::builtin_time(const Command& cmd) {
+    return printFormattedTime(cmd, "time", "%H:%M:%S");
+}
+
+int Builtins::builtin_history(const Command& cmd) {
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
+
+    if (simpleCmd->args.empty()) {
+        History::print();
+        return 0;
+    }
+
+    const std::string& action = simpleCmd->args[0];
+
+    if (action == "clear") {
+        if (simpleCmd->args.size() != 1) {
+            std::cerr << "Usage: history clear" << std::endl;
+            return -1;
+        }
+
+        History::clear();
+        return 0;
+    }
+
+    if (action == "limit") {
+        if (simpleCmd->args.size() != 1) {
+            std::cerr << "Usage: history limit" << std::endl;
+            return -1;
+        }
+
+        std::cout << History::getLimit() << std::endl;
+        return 0;
+    }
+
+    if (action == "set") {
+        if (simpleCmd->args.size() != 2) {
+            std::cerr << "Usage: history set <1-" << History::maximumLimit() << ">" << std::endl;
+            return -1;
+        }
+
+        int parsedLimit;
+        if (!parsePositiveInt(simpleCmd->args[1], parsedLimit) ||
+            !History::setLimit(static_cast<size_t>(parsedLimit))) {
+            std::cerr << "history: limit must be between 1 and "
+                      << History::maximumLimit() << std::endl;
+            return -1;
+        }
+
+        std::cout << "History limit set to " << History::getLimit() << std::endl;
+        return 0;
+    }
+
+    std::cerr << "Usage: history [limit|clear|set <1-" << History::maximumLimit() << ">]" << std::endl;
+    return -1;
+}
+
+int Builtins::builtin_fg(const Command& cmd) {
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
+
+    if (simpleCmd->args.size() > 1) {
+        std::cerr << "Usage: fg [pid|%job_id]" << std::endl;
+        return -1;
+    }
+
+    Jobs::reap(false);
+
+    Jobs::Job job;
+    std::string target = simpleCmd->args.empty() ? "" : simpleCmd->args[0];
+    if (!resolveJobTarget(target, "fg", job)) {
+        return -1;
+    }
+
+    if (!Jobs::isActive(job.status)) {
+        std::cerr << "fg: job is not active: %" << job.id << std::endl;
+        return -1;
+    }
+
+    if (::kill(-job.pid, SIGCONT) != 0) {
+        perror("fg");
+        return -1;
+    }
+
+    Jobs::setStatusByPid(job.pid, Jobs::Status::Running);
+    std::cout << job.command << std::endl;
+    return Executor::waitForForegroundProcessGroup(job.pid, job.command, job.pids, job.id);
+}
+
+int Builtins::builtin_bg(const Command& cmd) {
+    const SimpleCommand* simpleCmd = requireSimpleCommand(cmd);
+    if (simpleCmd == nullptr) {
+        return -1;
+    }
+
+    if (simpleCmd->args.size() > 1) {
+        std::cerr << "Usage: bg [pid|%job_id]" << std::endl;
+        return -1;
+    }
+
+    Jobs::reap(false);
+
+    Jobs::Job job;
+    std::string target = simpleCmd->args.empty() ? "" : simpleCmd->args[0];
+    if (!resolveJobTarget(target, "bg", job)) {
+        return -1;
+    }
+
+    if (!Jobs::isActive(job.status)) {
+        std::cerr << "bg: job is not active: %" << job.id << std::endl;
+        return -1;
+    }
+
+    if (::kill(-job.pid, SIGCONT) != 0) {
+        perror("bg");
+        return -1;
+    }
+
+    Jobs::setStatusByPid(job.pid, Jobs::Status::Running);
+    std::cout << "[" << job.id << "] " << job.command << " &" << std::endl;
     return 0;
 }
 

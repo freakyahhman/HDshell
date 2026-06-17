@@ -5,6 +5,7 @@
 tinyshell
 *.o
 *.out
+history.txt
 
 # OS
 .DS_Store

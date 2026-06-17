@@ -94,7 +94,28 @@ int statusToExitCode(int status) {
     return -1;
 }
 
-int executePipelineForeground(const std::vector<std::unique_ptr<Command>>& subcommands, pid_t processGroupId) {
+int waitForPipelineChildren(const std::vector<pid_t>& childPids) {
+    int lastStatus = 0;
+
+    for (size_t i = 0; i < childPids.size(); ++i) {
+        int status;
+        if (waitpid(childPids[i], &status, 0) < 0) {
+            perror("waitpid");
+            return -1;
+        }
+
+        if (i + 1 == childPids.size()) {
+            lastStatus = status;
+        }
+    }
+
+    return statusToExitCode(lastStatus);
+}
+
+int executePipeline(const std::vector<std::unique_ptr<Command>>& subcommands,
+                    pid_t processGroupId,
+                    bool claimTerminal,
+                    const std::string& commandString) {
     std::vector<std::array<int, 2>> pipes(subcommands.size() - 1, std::array<int, 2>{-1, -1});
     for (auto& pipeFds : pipes) {
         if (pipe(pipeFds.data()) < 0) {
@@ -126,9 +147,7 @@ int executePipelineForeground(const std::vector<std::unique_ptr<Command>>& subco
         }
 
         if (pid == 0) {
-            if (processGroupId > 0) {
-                setpgid(0, processGroupId);
-            }
+            Executor::prepareChildProcess(processGroupId);
 
             if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
                 perror("dup2");
@@ -144,28 +163,20 @@ int executePipelineForeground(const std::vector<std::unique_ptr<Command>>& subco
             executeSimpleCommandInChild(simpleCmd);
         }
 
-        if (processGroupId > 0) {
-            setpgid(pid, processGroupId);
+        if (processGroupId == 0) {
+            processGroupId = pid;
         }
+        setpgid(pid, processGroupId);
         childPids.push_back(pid);
     }
 
     closeAllPipes(pipes);
 
-    int lastStatus = 0;
-    for (size_t i = 0; i < childPids.size(); ++i) {
-        int status;
-        if (waitpid(childPids[i], &status, 0) < 0) {
-            perror("waitpid");
-            return -1;
-        }
-
-        if (i + 1 == childPids.size()) {
-            lastStatus = status;
-        }
+    if (claimTerminal) {
+        return Executor::waitForForegroundProcessGroup(processGroupId, commandString, childPids);
     }
 
-    return statusToExitCode(lastStatus);
+    return waitForPipelineChildren(childPids);
 }
 }
 
@@ -246,6 +257,7 @@ int PipeCommand::execute() {
     }
 
     if (run_in_background) {
+        std::string commandString = buildPipelineCommandString(*this);
         pid_t runnerPid = fork();
         if (runnerPid < 0) {
             perror("fork");
@@ -254,18 +266,18 @@ int PipeCommand::execute() {
         }
 
         if (runnerPid == 0) {
-            setpgid(0, 0);
-            int pipelineExitCode = executePipelineForeground(subcommands, getpid());
+            Executor::prepareChildProcess(0);
+            int pipelineExitCode = executePipeline(subcommands, getpid(), false, commandString);
             _exit(pipelineExitCode == -1 ? 1 : pipelineExitCode);
         }
 
         setpgid(runnerPid, runnerPid);
-        int jobId = Jobs::add(runnerPid, buildPipelineCommandString(*this));
+        int jobId = Jobs::add(runnerPid, commandString);
         std::cout << "[" << jobId << "] " << runnerPid << std::endl;
         exit_code = 0;
         return exit_code;
     }
 
-    exit_code = executePipelineForeground(subcommands, 0);
+    exit_code = executePipeline(subcommands, 0, true, buildPipelineCommandString(*this));
     return exit_code;
 }

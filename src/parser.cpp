@@ -1,5 +1,8 @@
 #include "parser.h"
+#include <cctype>
+#include <cstdlib>
 #include <iostream>
+#include <unistd.h>
 
 bool isPipeCommand(const std::vector<std::string>& tokens) {
     for (const auto& token : tokens) {
@@ -12,6 +15,81 @@ bool isPipeCommand(const std::vector<std::string>& tokens) {
 
 bool isSpecialOperator(char c) {
     return c == '|' || c == '<' || c == '>' || c == '&';
+}
+
+bool isEnvNameStart(char c) {
+    return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
+}
+
+bool isEnvNameChar(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+}
+
+std::string expandEnvironmentVariables(const std::string& token) {
+    std::string expanded;
+
+    for (size_t i = 0; i < token.size(); ++i) {
+        if (token[i] != '$') {
+            expanded += token[i];
+            continue;
+        }
+
+        if (i + 1 >= token.size()) {
+            expanded += '$';
+            continue;
+        }
+
+        if (token[i + 1] == '$') {
+            expanded += std::to_string(getpid());
+            ++i;
+            continue;
+        }
+
+        std::string name;
+        size_t nameEnd = i + 1;
+
+        if (token[i + 1] == '{') {
+            size_t closeBrace = token.find('}', i + 2);
+            if (closeBrace == std::string::npos) {
+                expanded += '$';
+                continue;
+            }
+
+            name = token.substr(i + 2, closeBrace - (i + 2));
+            nameEnd = closeBrace + 1;
+        }
+        else if (isEnvNameStart(token[i + 1])) {
+            nameEnd = i + 2;
+            while (nameEnd < token.size() && isEnvNameChar(token[nameEnd])) {
+                ++nameEnd;
+            }
+            name = token.substr(i + 1, nameEnd - (i + 1));
+        }
+        else {
+            expanded += '$';
+            continue;
+        }
+
+        const char* value = getenv(name.c_str());
+        if (value != nullptr) {
+            expanded += value;
+        }
+
+        i = nameEnd - 1;
+    }
+
+    return expanded;
+}
+
+std::vector<std::string> expandEnvironmentTokens(const std::vector<std::string>& tokens) {
+    std::vector<std::string> expandedTokens;
+    expandedTokens.reserve(tokens.size());
+
+    for (const std::string& token : tokens) {
+        expandedTokens.push_back(expandEnvironmentVariables(token));
+    }
+
+    return expandedTokens;
 }
 
 void extractBackgroundFlag(std::vector<std::string>& tokens, bool& runInBackground) {
@@ -44,7 +122,7 @@ Command* Parser::parse(const std::string& input) {
         return nullptr; // Tra ve nullptr neu input rong
     }
 
-    std::vector<std::string> tokens = tokenize(trimmedInput);
+    std::vector<std::string> tokens = expandEnvironmentTokens(tokenize(trimmedInput));
 
     if (isPipeCommand(tokens)) {
         pipeCmd = new PipeCommand({}); // Tao mot PipeCommand moi, sau nay se can them logic de phan tich tokens de tao cac subcommand va thiet lap redirection

@@ -32,6 +32,24 @@ inline std::string resolveDataFilePath(const std::string& fileName) {
 
     return (fs::current_path() / "data" / fileName).string();
 }
+
+inline std::string resolveShellFilePath(const std::string& fileName) {
+    namespace fs = std::filesystem;
+
+    const char* rootEnv = std::getenv("HDSHELL_ROOT");
+    if (rootEnv != nullptr) {
+        return (fs::path(rootEnv) / fileName).string();
+    }
+
+    char exePath[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+    if (len > 0) {
+        exePath[len] = '\0';
+        return (fs::path(exePath).parent_path() / fileName).string();
+    }
+
+    return (fs::current_path() / fileName).string();
+}
 }  // namespace path_utils
 
 #endif  // PATH_UTILS_H

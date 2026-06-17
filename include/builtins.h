@@ -26,6 +26,16 @@ private:
     static int builtin_killall(const Command& cmd);
     static int builtin_stop(const Command& cmd);
     static int builtin_resume(const Command& cmd);
+    static int builtin_fg(const Command& cmd);
+    static int builtin_bg(const Command& cmd);
+    static int builtin_env(const Command& cmd);
+    static int builtin_printenv(const Command& cmd);
+    static int builtin_export(const Command& cmd);
+    static int builtin_setenv(const Command& cmd);
+    static int builtin_unset(const Command& cmd);
+    static int builtin_date(const Command& cmd);
+    static int builtin_time(const Command& cmd);
+    static int builtin_history(const Command& cmd);
     static int builtin_change(const Command& cmd);
 };
 
